@@ -131,8 +131,8 @@ class BaseModel(nn.Module):
         """Load previously saved weights. Note that this differs from
         `from_path()` method in several ways:
         -Nothing is returned since we are not creating a new model.
-        -By default, model is returned in training mode, since the intended
-        use is to quickly revert to a desired set of weights while trianing.
+        -By default, model is put in training mode, since the intended
+        use is to quickly revert to a desired set of weights while training.
         -This is called on a model instance, whereas from_path is a class
         method used to construct a new object.
 

@@ -33,7 +33,8 @@ setup(
         'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
     ],
-    description="Utilities for machine learning, mostly using scikit-learn and PyTorch.",
+    description='Utilities for machine learning, mostly using scikit-learn and'
+                ' PyTorch.',
     entry_points={
         'console_scripts': [
             'ml_htools=ml_htools.cli:main',
