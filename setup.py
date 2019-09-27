@@ -11,7 +11,9 @@ with open('README.rst') as readme_file:
 with open('HISTORY.rst') as history_file:
     history = history_file.read()
 
-requirements = ['Click>=6.0', ]
+# requirements = ['Click>=6.0', ]
+with open('requirements_dev.txt', 'r') as f:
+    requirements = [line.strip() for line in f][11:]
 
 setup_requirements = ['pytest-runner', ]
 
@@ -33,8 +35,8 @@ setup(
         'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
     ],
-    description='Utilities for machine learning, mostly using scikit-learn and'
-                ' PyTorch.',
+    description='Utilities for machine learning using scikit-learn and '
+                'PyTorch.',
     entry_points={
         'console_scripts': [
             'ml_htools=ml_htools.cli:main',
