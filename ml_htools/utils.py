@@ -1,12 +1,10 @@
 from collections import Counter
 import os
 import numpy as np
-import pickle
 from sklearn.model_selection import train_test_split
 import torch
 
 
-# IN PROGRESS: see notebook
 class Vocabulary:
 
     def __init__(self, w2idx, w2vec=None, idx_misc=None, corpus_counts=None):
@@ -66,6 +64,8 @@ class Vocabulary:
             Loading the GloVe vectors can be slow, so for testing purposes
             it can be helpful to read in a subset. If no value is provided,
             all 400,000 lines in the file will be read in.
+        idx_misc: dict
+            Map non-standard tokens to indices. See constructor docstring.
         """
         w2idx = dict()
         w2vec = dict()
@@ -228,6 +228,49 @@ class Vocabulary:
         np.array
         """
         return self.w2vec.get(word, self.w2vec['<UNK>'])
+
+    def encode(self, text, nlp, max_len, pad_end=True, trim_start=True):
+        """Encode text so that each token is replaced by its integer index in
+        the vocab.
+
+        Parameters
+        -----------
+        text: str
+            Raw text to be encoded.
+        nlp: spacy.lang.en.English
+            Spacy tokenizer. Typically want to disable 'parser', 'tagger', and
+            'ner' as they aren't used here and slow down the encoding process.
+        max_len: int
+            Length of output encoding. If text is shorter, it will be padded
+            to fit the specified length. If text is longer, it will be
+            trimmed.
+        pad_end: bool
+            If True, add padding to the end of short sentences. If False, pad
+            the start of these sentences.
+        trim_start: bool
+            If True, trim off the start of sentences that are too long. If
+            False, trim off the end.
+
+        Returns
+        --------
+        np.array, shape max_len
+        """
+        output = np.ones(max_len) * self.idx('<PAD>')
+        encoded = [self.idx(tok.text) for tok in nlp(text.lower())]
+
+        # Trim sentence in case it's longer than max_len.
+        if len(encoded) > max_len:
+            if trim_start:
+                encoded = encoded[len(encoded) - max_len:]
+            else:
+                encoded = encoded[:max_len]
+
+        # Replace zeros at start or end, depending on choice of pad_end.
+        if pad_end:
+            output[:len(encoded)] = encoded
+        else:
+            output[max_len-len(encoded):] = encoded
+        return output
 
     def __getitem__(self, i):
         """This will map an index (int) to a word (str).
