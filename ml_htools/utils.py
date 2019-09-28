@@ -7,7 +7,8 @@ import torch
 
 class Vocabulary:
 
-    def __init__(self, w2idx, w2vec=None, idx_misc=None, corpus_counts=None):
+    def __init__(self, w2idx, w2vec=None, idx_misc=None, corpus_counts=None,
+                 all_lower=True):
         """Defines a vocabulary object for NLP problems, allowing users to
         encode text with indices or embeddings.
 
@@ -29,12 +30,12 @@ class Vocabulary:
         corpus_counts: collections.Counter
             Counter dict mapping words to their number of occurrences in a
             corpus (optional).
+        all_lower: bool
+            Specifies whether the data you've passed in (w2idx, w2vec, i2w) is
+            all lowercase. Note that this will NOT change any of this data. If
+            True, it simply lowercases user-input words when looking up their
+            index or vector.
         """
-        if w2vec:
-            self.dim = len(w2vec[self[-1]])
-        else:
-            w2vec = dict()
-            self.dim = 1
         if not idx_misc:
             idx_misc = {'<PAD>': 0,
                         '<UNK>': 1}
@@ -42,21 +43,27 @@ class Vocabulary:
         # Check that space has been left for misc keys.
         assert len(idx_misc) == min(w2idx.values())
 
-        # Attributes that store data.
+        # Core data structures.
         self.w2idx = {**self.idx_misc, **w2idx}
         self.i2w = [word for word, idx in sorted(self.w2idx.items(),
                                                  key=lambda x: x[1])]
-        self.w2vec = w2vec
+        self.w2vec = w2vec or dict()
 
         # Miscellaneous other attributes.
+        if w2vec:
+            self.dim = len(w2vec[self[-1]])
+        else:
+            self.dim = 1
         self.corpus_counts = corpus_counts
         self.embedding_matrix = None
         self.w2vec['<UNK>'] = np.zeros(self.dim)
+        self.all_lower = all_lower
 
     @classmethod
     def from_glove_file(cls, path, max_lines=float('inf'), idx_misc=None):
         """Create a new Vocabulary object by loading GloVe vectors from a text
-        file.
+        file. The embeddings are all lowercase so the user does not have the
+        option to set the all_lower parameter.
 
         Parameters
         -----------
@@ -74,22 +81,38 @@ class Vocabulary:
         misc_len = 2 if not idx_misc else len(idx_misc)
 
         with open(path, 'r') as f:
-            for i, line in enumerate(f, misc_len):
-                if i > max_lines:
+            for i, line in enumerate(f):
+                if i >= max_lines:
                     break
                 word, *values = line.strip().split(' ')
-                w2idx[word] = i
+                w2idx[word] = i + misc_len
                 w2vec[word] = np.array(values, dtype=np.float)
 
         return cls(w2idx, w2vec, idx_misc)
 
     @classmethod
-    def from_tokens(cls, tokens, idx_misc=None):
+    def from_tokens(cls, tokens, idx_misc=None, all_lower=True):
+        """Construct a Vocabulary object from a list or array of tokens.
+
+        Parameters
+        -----------
+        tokens: list[str]
+            The word-tokenized corpus.
+        idx_misc: dict
+            Map non-standard tokens to indices. See constructor docstring.
+        all_lower: bool
+            Specifies whether your tokens are all lowercase.
+
+        Returns
+        --------
+        Vocabulary
+        """
         misc_len = 2 if not idx_misc else len(idx_misc)
         counts = Counter(tokens)
         w2idx = {word: i for i, (word, freq)
                  in enumerate(counts.most_common(), misc_len)}
-        return cls(w2idx, idx_misc=idx_misc, corpus_counts=counts)
+        return cls(w2idx, idx_misc=idx_misc, corpus_counts=counts,
+                   all_lower=all_lower)
 
     def save(self, path, verbose=True):
         """Pickle Vocabulary object for later use. We can then quickly load
@@ -109,13 +132,17 @@ class Vocabulary:
 
     def filter_words(self, tokens, max_words=None, min_freq=0, inplace=False,
                      recompute=False):
-        """
+        """Filter your vocabulary by specifying a max number of words or a min
+        frequency in the corpus. When done in place, this also sorts vocab by
+        frequency with more common words coming first (after idx_misc).
+
         Parameters
         -----------
         tokens: list[str]
             A tokenized list of words in the corpus (must be all lowercase
-            when using GloVe vectors). There is no need to hold out test data
-            here since we are not using labels.
+            when self.all_lower=True, such as when using GloVe vectors). There
+            is no need to hold out test data here since we are not using
+            labels.
         max_words: int (optional)
             Provides an upper threshold for the number of words in the
             vocabulary. If no value is passed in, no maximum limit will be
@@ -214,6 +241,8 @@ class Vocabulary:
         >>> vocab.idx('the')
         2
         """
+        if self.all_lower:
+            word = word.lower()
         return self.w2idx.get(word, self.w2idx['<UNK>'])
 
     def vector(self, word):
@@ -229,6 +258,8 @@ class Vocabulary:
         --------
         np.array
         """
+        if self.all_lower:
+            word = word.lower()
         return self.w2vec.get(word, self.w2vec['<UNK>'])
 
     def encode(self, text, nlp, max_len, pad_end=True, trim_start=True):
@@ -258,7 +289,7 @@ class Vocabulary:
         np.array, shape max_len
         """
         output = np.ones(max_len) * self.idx('<PAD>')
-        encoded = [self.idx(tok.text) for tok in nlp(text.lower())]
+        encoded = [self.idx(tok.text) for tok in nlp(text)]
 
         # Trim sentence in case it's longer than max_len.
         if len(encoded) > max_len:
