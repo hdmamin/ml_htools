@@ -20,15 +20,19 @@ class Vocabulary:
             a longer idx_misc is passed in, the minimum index would be larger.
         w2vec: dict[str, np.array]
             Dictionary mapping words to their embedding vectors stored as
-            numpy arrays. This is optional in case we want to train embeddings
-            from scratch.
+            numpy arrays (optional).
         idx_misc: dict
             A dictionary mapping non-word tokens to indices. If none is passed
             in, a default version will be used with keys for unknown tokens
             and padding. A customized version might pass in additional tokens
             for repeated characters or all caps, for example.
+        corpus_counts: collections.Counter
+            Counter dict mapping words to their number of occurrences in a
+            corpus (optional).
         """
-        if not w2vec:
+        if w2vec:
+            self.dim = len(w2vec[self[-1]])
+        else:
             w2vec = dict()
             self.dim = 1
         if not idx_misc:
@@ -45,10 +49,8 @@ class Vocabulary:
         self.w2vec = w2vec
 
         # Miscellaneous other attributes.
-        self.corpus_counts = dict() if not corpus_counts else corpus_counts
+        self.corpus_counts = corpus_counts
         self.embedding_matrix = None
-        if w2vec:
-            self.dim = len(w2vec[self[-1]])
         self.w2vec['<UNK>'] = np.zeros(self.dim)
 
     @classmethod
