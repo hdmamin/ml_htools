@@ -114,6 +114,21 @@ class Vocabulary:
         return cls(w2idx, idx_misc=idx_misc, corpus_counts=counts,
                    all_lower=all_lower)
 
+    @staticmethod
+    def from_pickle(path):
+        """Load a previously saved Vocabulary object.
+
+        Parameters
+        -----------
+        path: str
+            Location of pickled Vocabulary file.
+
+        Returns
+        --------
+        Vocabulary
+        """
+        return torch.load(path)
+
     def save(self, path, verbose=True):
         """Pickle Vocabulary object for later use. We can then quickly load
         the object using torch.load(path), which can be much faster than
@@ -130,7 +145,7 @@ class Vocabulary:
             print(f'Saving vocabulary to {path}.')
         torch.save(self, path)
 
-    def filter_words(self, tokens, max_words=None, min_freq=0, inplace=False,
+    def filter_tokens(self, tokens, max_words=None, min_freq=0, inplace=False,
                      recompute=False):
         """Filter your vocabulary by specifying a max number of words or a min
         frequency in the corpus. When done in place, this also sorts vocab by
@@ -352,6 +367,16 @@ class Vocabulary:
 
     def __contains__(self, word):
         return word in self.w2idx.keys()
+
+    def __eq__(self, obj):
+        if not isinstance(obj, Vocabulary):
+            return False
+
+        ignore = {'w2vec', 'embedding_matrix'}
+        attrs = [k for k, v in hdir(vocab).items()
+                 if v == 'attribute' and k not in ignore]
+        return all([getattr(self, attr) == getattr(obj, attr)
+                    for attr in attrs])
 
     def __repr__(self):
         msg = f'Vocabulary({len(self)} words'
