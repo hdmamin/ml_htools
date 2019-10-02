@@ -241,7 +241,7 @@ class Vocabulary:
         >>> vocab.idx('the')
         2
         """
-        if self.all_lower:
+        if self.all_lower and word not in self.idx_misc:
             word = word.lower()
         return self.w2idx.get(word, self.w2idx['<UNK>'])
 
@@ -258,7 +258,7 @@ class Vocabulary:
         --------
         np.array
         """
-        if self.all_lower:
+        if self.all_lower and word not in self.idx_misc:
             word = word.lower()
         return self.w2vec.get(word, self.w2vec['<UNK>'])
 
@@ -286,7 +286,8 @@ class Vocabulary:
 
         Returns
         --------
-        np.array, shape max_len
+        np.array[int]: Array of length max_len containing integer indices
+            corresponding to the words passed in.
         """
         output = np.ones(max_len) * self.idx('<PAD>')
         encoded = [self.idx(tok.text) for tok in nlp(text)]
@@ -303,7 +304,23 @@ class Vocabulary:
             output[:len(encoded)] = encoded
         else:
             output[max_len-len(encoded):] = encoded
-        return output
+        return output.astype(int)
+
+    def decode(self, idx):
+        """Convert a list of indices to a string of words/tokens.
+
+        Parameters
+        -----------
+        idx: list[int]
+            A list of integers indexing into the vocabulary. This will often
+            be the output of the encode() method.
+
+        Returns
+        --------
+        list[str]: A list of words/tokens reconstructed by indexing into the
+            vocabulary.
+        """
+        return [self[i] for i in idx]
 
     def __getitem__(self, i):
         """This will map an index (int) to a word (str).
