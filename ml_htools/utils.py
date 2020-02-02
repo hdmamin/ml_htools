@@ -4,6 +4,8 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 import torch
 
+from htools import save, load
+
 
 class Vocabulary:
 
@@ -127,7 +129,7 @@ class Vocabulary:
         --------
         Vocabulary
         """
-        return torch.load(path)
+        return load(path)
 
     def save(self, path, verbose=True):
         """Pickle Vocabulary object for later use. We can then quickly load
@@ -141,12 +143,10 @@ class Vocabulary:
         verbose: bool
             If True, print message showing where the object was saved to.
         """
-        if verbose:
-            print(f'Saving vocabulary to {path}.')
-        torch.save(self, path)
+        save(self, path, verbose)
 
     def filter_tokens(self, tokens, max_words=None, min_freq=0, inplace=False,
-                     recompute=False):
+                      recompute=False):
         """Filter your vocabulary by specifying a max number of words or a min
         frequency in the corpus. When done in place, this also sorts vocab by
         frequency with more common words coming first (after idx_misc).

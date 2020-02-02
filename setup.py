@@ -11,7 +11,6 @@ with open('README.rst') as readme_file:
 with open('HISTORY.rst') as history_file:
     history = history_file.read()
 
-# requirements = ['Click>=6.0', ]
 with open('requirements_dev.txt', 'r') as f:
     requirements = [line.strip() for line in f][11:]
 
