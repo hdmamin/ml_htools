@@ -407,15 +407,13 @@ def load_glove(dim, glove_dir):
     return w2vec
 
 
-def train_val_test_split(x, y, train_p, val_p, state=1, shuffle=True):
+def train_val_test_split(df, train_p=0.8, val_p=0.1, state=1, shuffle=True):
     """Wrapper to split data into train, validation, and test sets.
 
     Parameters
     -----------
-    x: pd.DataFrame, np.ndarray
-        Features
-    y: pd.DataFrame, np.ndarray
-        Labels
+    df: pd.DataFrame, np.ndarray
+        Dataframe containing features (X) and labels (y).
     train_p: float
         Percent of data to assign to train set.
     val_p: float
@@ -427,13 +425,9 @@ def train_val_test_split(x, y, train_p, val_p, state=1, shuffle=True):
         If True, randomly shuffle the data before splitting.
     """
     test_p = 1 - val_p / (1 - train_p)
-    x_train, x_test, y_train, y_test = train_test_split(x,
-                                                        y,
-                                                        train_size=train_p,
-                                                        shuffle=shuffle,
-                                                        random_state=state)
-    x_val, x_test, y_val, y_test = train_test_split(x_test,
-                                                    y_test,
-                                                    test_size=test_p,
-                                                    random_state=state)
-    return x_train, x_val, x_test, y_train, y_val, y_test
+    train, val = train_test_split(df, train_size=train_p, shuffle=shuffle,
+                                  random_state=state)
+    test = None
+    if not np.isclose(test_p, 0):
+        val, test = train_test_split(val, test_size=test_p, random_state=state)
+    return train, val, test

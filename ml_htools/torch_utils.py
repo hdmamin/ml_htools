@@ -3,10 +3,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import warnings
 
 
 class BaseModel(nn.Module):
-    """Parent class for Pytorch models that provides some convenient
+    """This class is provided for backward compatibility. In ml_htools >=0.4.0,
+    we recommend using the ModelMixin class instead.
+
+    Parent class for Pytorch models that provides some convenient
     functionality.
 
     As shown below, the child class should inherit from BaseModel.
@@ -34,6 +38,8 @@ class BaseModel(nn.Module):
 
     def __init__(self, init_variables):
         super().__init__()
+        warnings.warn('In ml_htools >=0.4.0, we we recommend using the '
+                      'ModelMixin class instead of BaseModel.')
         init_variables.pop('self', None)
         init_variables.pop('__class__', None)
         self._init_variables = init_variables
@@ -168,6 +174,51 @@ class BaseModel(nn.Module):
             print(f'Epoch {epoch} weights loaded from {path}. '
                   f'\nModel parameters: {data["params"]}'
                   f'\nCurrently in {mode} mode.')
+
+
+class ModelMixin:
+    """Mixin class that provides most of the methods in BaseModel without
+    dealing with multiple __init__ methods in super classes. BaseModel remains
+    in the library for now for backward compatibility.
+    
+    Examples
+    --------
+    class ConvNet(nn.Module, ModelMixin):
+
+        def __init__(self, x_dim, batch_norm=True):
+            super().__init__()
+            self.x_dim = x_dim
+            self.batch_norm = batch_norm
+
+        def forward(self, x):
+            ...
+
+    cnn = ConvNet(3)
+    cnn.dims()
+    cnn.trainable()
+    """
+
+    def dims(self):
+        """Get shape of each layer's weights."""
+        return [tuple(p.shape) for p in self.parameters()]
+
+    def trainable(self):
+        """Check which layers are trainable."""
+        return [(tuple(p.shape), p.requires_grad) for p in self.parameters()]
+
+    def weight_stats(self):
+        """Check mean and standard deviation of each layer's weights."""
+        return [stats(p.data, 3) for p in self.parameters()]
+
+    def plot_weights(self):
+        """Plot histograms of each layer's weights."""
+        n_layers = len(self.dims())
+        fig, ax = plt.subplots(n_layers, figsize=(8, n_layers * 1.25))
+        for i, p in enumerate(self.parameters()):
+            ax[i].hist(p.data.flatten())
+            ax[i].set_title(f'Shape: {tuple(p.shape)} Stats: {stats(p.data)}')
+        plt.tight_layout()
+        plt.show()
 
 
 class GRelu(nn.Module):
