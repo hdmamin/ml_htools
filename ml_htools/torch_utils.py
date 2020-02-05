@@ -1,8 +1,9 @@
 import os
+from collections.abc import Iterable
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
 import warnings
 
 
@@ -61,6 +62,7 @@ class BaseModel(nn.Module):
         """Plot histograms of each layer's weights."""
         n_layers = len(self.dims())
         fig, ax = plt.subplots(n_layers, figsize=(8, n_layers * 1.25))
+        if not isinstance(ax, Iterable): ax = [ax]
         for i, p in enumerate(self.parameters()):
             ax[i].hist(p.data.flatten())
             ax[i].set_title(f'Shape: {tuple(p.shape)} Stats: {stats(p.data)}')
@@ -214,6 +216,7 @@ class ModelMixin:
         """Plot histograms of each layer's weights."""
         n_layers = len(self.dims())
         fig, ax = plt.subplots(n_layers, figsize=(8, n_layers * 1.25))
+        if not isinstance(ax, Iterable): ax = [ax]
         for i, p in enumerate(self.parameters()):
             ax[i].hist(p.data.flatten())
             ax[i].set_title(f'Shape: {tuple(p.shape)} Stats: {stats(p.data)}')
