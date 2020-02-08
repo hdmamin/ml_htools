@@ -202,6 +202,7 @@ def variable_lr_optimizer(model=None, groups=None, lrs=[3e-3],
             for group, lr in zip(groups, lrs)]
     return optimizer(data, eps=eps, **kwargs)
 
+
 # FastAI recommendation: built-in value of 1e-8 risks exploding gradients.
 Adam = partial(torch.optim.Adam, epsilon=1e-3)
 
