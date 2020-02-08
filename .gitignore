@@ -104,5 +104,4 @@ ENV/
 # HM
 .DS_Store
 data/
-notebooks/
 .idea/

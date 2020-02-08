@@ -1,5 +1,6 @@
 import os
 from collections.abc import Iterable
+from functools import partial
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
@@ -7,6 +8,206 @@ import torch.nn.functional as F
 import warnings
 
 
+class ModelMixin:
+    """Mixin class that provides most of the methods in BaseModel without
+    dealing with multiple __init__ methods in super classes. BaseModel remains
+    in the library for now for backward compatibility.
+
+    Examples
+    --------
+    class ConvNet(nn.Module, ModelMixin):
+
+        def __init__(self, x_dim, batch_norm=True):
+            super().__init__()
+            self.x_dim = x_dim
+            self.batch_norm = batch_norm
+
+        def forward(self, x):
+            ...
+
+    cnn = ConvNet(3)
+    cnn.dims()
+    cnn.trainable()
+    """
+
+    def dims(self):
+        """Get shape of each layer's weights."""
+        return [tuple(p.shape) for p in self.parameters()]
+
+    def trainable(self):
+        """Check which layers are trainable."""
+        return [(tuple(p.shape), p.requires_grad) for p in self.parameters()]
+
+    def weight_stats(self):
+        """Check mean and standard deviation of each layer's weights."""
+        return [stats(p.data, 3) for p in self.parameters()]
+
+    def plot_weights(self):
+        """Plot histograms of each layer's weights."""
+        n_layers = len(self.dims())
+        fig, ax = plt.subplots(n_layers, figsize=(8, n_layers * 1.25))
+        if not isinstance(ax, Iterable): ax = [ax]
+        for i, p in enumerate(self.parameters()):
+            ax[i].hist(p.data.flatten())
+            ax[i].set_title(f'Shape: {tuple(p.shape)} Stats: {stats(p.data)}')
+        plt.tight_layout()
+        plt.show()
+
+
+class GRelu(nn.Module):
+    """Generic ReLU."""
+
+    def __init__(self, leak=0.0, max=float('inf'), sub=0.0):
+        super().__init__()
+        self.leak = leak
+        self.max = max
+        self.sub = sub
+
+    def forward(self, x):
+        """Check which operations are necessary to save computation."""
+        x = F.leaky_relu(x, self.leak) if self.leak else F.relu(x)
+        if self.sub:
+            x -= self.sub
+        if self.max:
+            x = torch.clamp(x, max=self.max)
+        return x
+
+    def __repr__(self):
+        return f'GReLU(leak={self.leak}, max={self.max}, sub={self.sub})'
+
+
+JRelu = GRelu(leak=.1, sub=.4, max=6.0)
+
+
+def conv_block(c_in, c_out, norm=True, **kwargs):
+    """Create a convolutional block (the latter referring to a backward
+    strided convolution) optionally followed by a batch norm layer. Note that
+    batch norm has learnable affine parameters which remove the need for a
+    bias in the preceding conv layer. When batch norm is not used, however,
+    the conv layer will include a bias term.
+
+    Useful kwargs include kernel_size, stride, and padding (see pytorch docs
+    for nn.Conv2d).
+
+    The activation function is not included in this block since we use this
+    to create ResBlock, which must perform an extra addition before the final
+    activation.
+
+    Parameters
+    -----------
+    c_in: int
+        # of input channels.
+    c_out: int
+        # of output channels.
+    norm: bool
+        If True, include a batch norm layer after the conv layer. If False,
+        no norm layer will be used.
+    """
+    bias = True
+    if norm:
+        bias = False
+        layers = [nn.BatchNorm2d(c_out)]
+    layers.insert(0, nn.Conv2d(c_in, c_out, bias=bias, **kwargs))
+    return nn.Sequential(*layers)
+
+
+class ResBlock(nn.Module):
+
+    def __init__(self, c_in, activation=JRelu, f=3, stride=1, pad=1,
+                 skip_size=2, norm=True):
+        """Residual block to be used in CycleGenerator. Note that f, stride,
+        and pad must be selected such that the height and width of the input
+        remain the same.
+
+        Parameters
+        -----------
+        c_in: int
+            # of input channels.
+        skip_size: int
+            Number of conv blocks inside the skip connection (default 2).
+            ResNet paper notes that skipping a single layer did not show
+            noticeable improvements.
+        f: int
+            Size of filter (f x f) used in convolution. Default 3.
+        stride: int
+            # of pixels the filter moves between each convolution. Default 1.
+        pad: int
+            Pixel padding around the input. Default 1.
+        norm: str
+            'bn' for batch norm, 'in' for instance norm
+        """
+        super().__init__()
+        self.skip_size = skip_size
+        self.layers = nn.ModuleList([conv_block(True, c_in, c_in,
+                                                kernel_size=f, stride=stride,
+                                                padding=pad, norm=norm)
+                                     for i in range(skip_size)])
+        self.activation = activation
+
+    def forward(self, x):
+        x_out = x
+        for i, layer in enumerate(self.layers):
+            x_out = layer(x_out)
+
+            # Final activation must be applied after addition.
+            if i != self.skip_size - 1:
+                x_out = self.activation(x_out)
+
+        return self.activation(x + x_out)
+
+
+def stats(x, digits=3):
+    """Quick wrapper to get mean and standard deviation of a tensor."""
+    return round(x.mean().item(), digits), round(x.std().item(), digits)
+
+
+def variable_lr_optimizer(model=None, groups=None, lrs=[3e-3],
+                          optimizer=torch.optim.Adam, eps=1e-3, **kwargs):
+    """Get an optimizer that uses different learning rates for different layer
+    groups. Additional keyword arguments can be used to alter momentum and/or
+    weight decay, for example, but for the sake of simplicity these values
+    will be the same across layer groups.
+
+    Parameters
+    -----------
+    model: nn.Module
+        A model object.
+    groups: nn.ModuleList (optional)
+        For this use case, the model should contain a ModuleList of layer
+        groups in the form of Sequential objects. This variable is then passed
+        in so each group can receive its own learning rate.
+    lrs: list[float]
+        A list containing the learning rates to use for each layer group. This
+        should be the same length as the number of layer groups in the model.
+        At times, we may want to use the same learning rate for all groups,
+        and can achieve this by passing in a list containing a single float.
+    optimizer: torch optimizer
+        The Torch optimizer to be created (Adam by default).
+    eps: float
+        Hyperparameter used by optimizer. The default of 1e-8 can lead to
+        exploding gradients, so we typically override this.
+
+    Examples
+    ---------
+    optim = variable_lr_optimizer(model, lrs=[3e-3, 3e-2, 1e-1])
+    """
+    assert model is None or groups is None
+
+    if model is not None:
+        groups = [model]
+
+    assert len(groups) == len(lrs)
+
+    data = [{'params': group.parameters(), 'lr': lr}
+            for group, lr in zip(groups, lrs)]
+    return optimizer(data, eps=eps, **kwargs)
+
+# FastAI recommendation: built-in value of 1e-8 risks exploding gradients.
+Adam = partial(torch.optim.Adam, epsilon=1e-3)
+
+DEVICE = torch.device('gpu' if torch.cuda.is_available() else 'cpu')
+
+# Unofficially deprecated
 class BaseModel(nn.Module):
     """This class is provided for backward compatibility. In ml_htools >=0.4.0,
     we recommend using the ModelMixin class instead.
@@ -176,195 +377,3 @@ class BaseModel(nn.Module):
             print(f'Epoch {epoch} weights loaded from {path}. '
                   f'\nModel parameters: {data["params"]}'
                   f'\nCurrently in {mode} mode.')
-
-
-class ModelMixin:
-    """Mixin class that provides most of the methods in BaseModel without
-    dealing with multiple __init__ methods in super classes. BaseModel remains
-    in the library for now for backward compatibility.
-    
-    Examples
-    --------
-    class ConvNet(nn.Module, ModelMixin):
-
-        def __init__(self, x_dim, batch_norm=True):
-            super().__init__()
-            self.x_dim = x_dim
-            self.batch_norm = batch_norm
-
-        def forward(self, x):
-            ...
-
-    cnn = ConvNet(3)
-    cnn.dims()
-    cnn.trainable()
-    """
-
-    def dims(self):
-        """Get shape of each layer's weights."""
-        return [tuple(p.shape) for p in self.parameters()]
-
-    def trainable(self):
-        """Check which layers are trainable."""
-        return [(tuple(p.shape), p.requires_grad) for p in self.parameters()]
-
-    def weight_stats(self):
-        """Check mean and standard deviation of each layer's weights."""
-        return [stats(p.data, 3) for p in self.parameters()]
-
-    def plot_weights(self):
-        """Plot histograms of each layer's weights."""
-        n_layers = len(self.dims())
-        fig, ax = plt.subplots(n_layers, figsize=(8, n_layers * 1.25))
-        if not isinstance(ax, Iterable): ax = [ax]
-        for i, p in enumerate(self.parameters()):
-            ax[i].hist(p.data.flatten())
-            ax[i].set_title(f'Shape: {tuple(p.shape)} Stats: {stats(p.data)}')
-        plt.tight_layout()
-        plt.show()
-
-
-class GRelu(nn.Module):
-    """Generic ReLU."""
-
-    def __init__(self, leak=0.0, max=float('inf'), sub=0.0):
-        super().__init__()
-        self.leak = leak
-        self.max = max
-        self.sub = sub
-
-    def forward(self, x):
-        """Check which operations are necessary to save computation."""
-        x = F.leaky_relu(x, self.leak) if self.leak else F.relu(x)
-        if self.sub:
-            x -= self.sub
-        if self.max:
-            x = torch.clamp(x, max=self.max)
-        return x
-
-    def __repr__(self):
-        return f'GReLU(leak={self.leak}, max={self.max}, sub={self.sub})'
-
-
-JRelu = GRelu(leak=.1, sub=.4, max=6.0)
-
-
-def conv_block(c_in, c_out, norm=True, **kwargs):
-    """Create a convolutional block (the latter referring to a backward
-    strided convolution) optionally followed by a batch norm layer. Note that
-    batch norm has learnable affine parameters which remove the need for a
-    bias in the preceding conv layer. When batch norm is not used, however,
-    the conv layer will include a bias term.
-
-    Useful kwargs include kernel_size, stride, and padding (see pytorch docs
-    for nn.Conv2d).
-
-    The activation function is not included in this block since we use this
-    to create ResBlock, which must perform an extra addition before the final
-    activation.
-
-    Parameters
-    -----------
-    c_in: int
-        # of input channels.
-    c_out: int
-        # of output channels.
-    norm: bool
-        If True, include a batch norm layer after the conv layer. If False,
-        no norm layer will be used.
-    """
-    bias = True
-    if norm:
-        bias = False
-        layers = [nn.BatchNorm2d(c_out)]
-    layers.insert(0, nn.Conv2d(c_in, c_out, bias=bias, **kwargs))
-    return nn.Sequential(*layers)
-
-
-class ResBlock(nn.Module):
-
-    def __init__(self, c_in, activation=JRelu, f=3, stride=1, pad=1,
-                 skip_size=2, norm=True):
-        """Residual block to be used in CycleGenerator. Note that f, stride,
-        and pad must be selected such that the height and width of the input
-        remain the same.
-
-        Parameters
-        -----------
-        c_in: int
-            # of input channels.
-        skip_size: int
-            Number of conv blocks inside the skip connection (default 2).
-            ResNet paper notes that skipping a single layer did not show
-            noticeable improvements.
-        f: int
-            Size of filter (f x f) used in convolution. Default 3.
-        stride: int
-            # of pixels the filter moves between each convolution. Default 1.
-        pad: int
-            Pixel padding around the input. Default 1.
-        norm: str
-            'bn' for batch norm, 'in' for instance norm
-        """
-        super().__init__()
-        self.skip_size = skip_size
-        self.layers = nn.ModuleList([conv_block(True, c_in, c_in,
-                                                kernel_size=f, stride=stride,
-                                                padding=pad, norm=norm)
-                                     for i in range(skip_size)])
-        self.activation = activation
-
-    def forward(self, x):
-        x_out = x
-        for i, layer in enumerate(self.layers):
-            x_out = layer(x_out)
-
-            # Final activation must be applied after addition.
-            if i != self.skip_size - 1:
-                x_out = self.activation(x_out)
-
-        return self.activation(x + x_out)
-
-
-def stats(x, digits=3):
-    """Quick wrapper to get mean and standard deviation of a tensor."""
-    return round(x.mean().item(), digits), round(x.std().item(), digits)
-
-
-def variable_lr_optimizer(model=None, groups=None, lrs=[3e-3],
-                          optimizer=torch.optim.Adam, **kwargs):
-    """Get an optimizer that uses different learning rates for different layer
-    groups. Additional keyword arguments can be used to alter momentum and/or
-    weight decay, for example, but for the sake of simplicity these values
-    will be the same across layer groups.
-
-    Parameters
-    -----------
-    model: nn.Module
-        model.parameters() generator.
-    groups: nn.ModuleList (optional)
-        For this use case, the model should contain a ModuleList of layer
-        groups in the form of Sequential objects. This variable is then passed
-        in so each group can receive its own learning rate.
-    lrs: list[float]
-        A list containing the learning rates to use for each layer group. This
-        should be the same length as the number of layer groups in the model.
-        At times, we may want to use the same learning rate for all groups,
-        and can achieve this by passing in a list containing a single float.
-    optimizer: torch optimizer
-        The Torch optimizer to be created (Adam by default).
-
-    Examples
-    ---------
-    optim = variable_lr_optimizer(model.groups, [3e-3, 3e-2, 1e-1])
-    """
-    assert bool(model is None) + bool(groups is None) == 1
-
-    if model is not None:
-        groups = [model]
-
-    assert len(groups) == len(lrs)
-
-    data = [{'params': group.parameters(), 'lr': lr}
-            for group, lr in zip(groups, lrs)]
-    return optimizer(data, **kwargs)
