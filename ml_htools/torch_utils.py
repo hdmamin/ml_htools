@@ -161,8 +161,8 @@ def stats(x, digits=3):
     return round(x.mean().item(), digits), round(x.std().item(), digits)
 
 
-def variable_lr_optimizer(model=None, groups=None, lrs=[3e-3],
-                          optimizer=torch.optim.Adam, eps=1e-3, **kwargs):
+def variable_lr_optimizer(model, lr=3e-3, optimizer=torch.optim.Adam,
+                          eps=1e-3, **kwargs):
     """Get an optimizer that uses different learning rates for different layer
     groups. Additional keyword arguments can be used to alter momentum and/or
     weight decay, for example, but for the sake of simplicity these values
@@ -171,16 +171,17 @@ def variable_lr_optimizer(model=None, groups=None, lrs=[3e-3],
     Parameters
     -----------
     model: nn.Module
-        A model object.
-    groups: nn.ModuleList (optional)
-        For this use case, the model should contain a ModuleList of layer
-        groups in the form of Sequential objects. This variable is then passed
-        in so each group can receive its own learning rate.
-    lrs: list[float]
-        A list containing the learning rates to use for each layer group. This
-        should be the same length as the number of layer groups in the model.
-        At times, we may want to use the same learning rate for all groups,
-        and can achieve this by passing in a list containing a single float.
+        A model object. If you intend to use differential learning rates,
+        the model must have an attribute `groups` containing a ModuleList of
+        layer groups in the form of Sequential objects. The number of layer
+        groups must match the number of learning rates passed in.
+    lr: float, Iterable[float]
+        A number of list of numbers containing the learning rates to use for
+        each layer group. There should generally be one LR for each layer group
+        in the model. If fewer LR's are provided, the last one will be
+        repeated to match the number of groups.
+        For example, we could use the same learning rate for all groups by
+        passing in a list containing a single float.
     optimizer: torch optimizer
         The Torch optimizer to be created (Adam by default).
     eps: float
@@ -191,20 +192,55 @@ def variable_lr_optimizer(model=None, groups=None, lrs=[3e-3],
     ---------
     optim = variable_lr_optimizer(model, lrs=[3e-3, 3e-2, 1e-1])
     """
-    assert model is None or groups is None
-
-    if model is not None:
-        groups = [model]
-
-    assert len(groups) == len(lrs)
+    groups = getattr(model, 'groups', [model])
+    lrs = list(lr) if isinstance(lr, Iterable) else [lr]
+    n_missing = len(groups) - len(lrs)
+    if n_missing > 0:
+        warnings.warn('Fewer learning rates than layer groups. '
+                      'Repeating last LR.')
+        lrs.extend(lrs[-1:] * n_missing)
+    elif n_missing < 0:
+        warnings.warn('More learning rates than layer groups. '
+                      'Last LRs will not be used.')
 
     data = [{'params': group.parameters(), 'lr': lr}
             for group, lr in zip(groups, lrs)]
     return optimizer(data, eps=eps, **kwargs)
 
 
+def update_optimizer(optim, *lrs):
+    """Pass in 1 or more learning rates, 1 for each layer group, and update the
+    optimizer accordingly. The optimizer is updated in place so nothing is
+    returned.
+
+    Parameters
+    ----------
+    optim: torch.optim
+        Optimizer object.
+    lrs: float
+        One or more learning rates. If using multiple values, usually the
+        earlier values will be smaller and later values will be larger.
+
+    Returns
+    -------
+    None
+    """
+    lrs = list(lrs)
+    n_missing = len(optim.param_groups) - len(lrs)
+    if n_missing > 0:
+        warnings.warn('Fewer learning rates than layer groups. '
+                      'Repeating last LR.')
+        lrs.extend(lrs[-1:] * n_missing)
+    elif n_missing < 0:
+        warnings.warn('More learning rates than layer groups. '
+                      'Last LRs will not be used.')
+
+    for group, lr in zip(optim.param_groups, lrs):
+        group['lr'] = lr
+
+
 # FastAI recommendation: built-in value of 1e-8 risks exploding gradients.
-Adam = partial(torch.optim.Adam, epsilon=1e-3)
+adam = partial(torch.optim.Adam, eps=1e-3)
 
 DEVICE = torch.device('gpu' if torch.cuda.is_available() else 'cpu')
 
