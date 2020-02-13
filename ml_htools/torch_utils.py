@@ -161,8 +161,8 @@ def stats(x, digits=3):
     return round(x.mean().item(), digits), round(x.std().item(), digits)
 
 
-def variable_lr_optimizer(model, lr=3e-3, optimizer=torch.optim.Adam,
-                          eps=1e-3, **kwargs):
+def variable_lr_optimizer(model, lr=3e-3, lr_mult=1.0,
+                          optimizer=torch.optim.Adam, eps=1e-3, **kwargs):
     """Get an optimizer that uses different learning rates for different layer
     groups. Additional keyword arguments can be used to alter momentum and/or
     weight decay, for example, but for the sake of simplicity these values
@@ -178,10 +178,8 @@ def variable_lr_optimizer(model, lr=3e-3, optimizer=torch.optim.Adam,
     lr: float, Iterable[float]
         A number of list of numbers containing the learning rates to use for
         each layer group. There should generally be one LR for each layer group
-        in the model. If fewer LR's are provided, the last one will be
-        repeated to match the number of groups.
-        For example, we could use the same learning rate for all groups by
-        passing in a list containing a single float.
+        in the model. If fewer LR's are provided, lr_mult will be used to
+        compute additional LRs. See `update_optimizer` for details.
     optimizer: torch optimizer
         The Torch optimizer to be created (Adam by default).
     eps: float
@@ -193,22 +191,14 @@ def variable_lr_optimizer(model, lr=3e-3, optimizer=torch.optim.Adam,
     optim = variable_lr_optimizer(model, lrs=[3e-3, 3e-2, 1e-1])
     """
     groups = getattr(model, 'groups', [model])
-    lrs = list(lr) if isinstance(lr, Iterable) else [lr]
-    n_missing = len(groups) - len(lrs)
-    if n_missing > 0:
-        warnings.warn('Fewer learning rates than layer groups. '
-                      'Repeating last LR.')
-        lrs.extend(lrs[-1:] * n_missing)
-    elif n_missing < 0:
-        warnings.warn('More learning rates than layer groups. '
-                      'Last LRs will not be used.')
-
-    data = [{'params': group.parameters(), 'lr': lr}
-            for group, lr in zip(groups, lrs)]
-    return optimizer(data, eps=eps, **kwargs)
+    # Placeholder LR used. We update this afterwards.
+    data = [{'params': group.parameters(), 'lr': 0} for group in groups]
+    optim = optimizer(data, eps=eps, **kwargs)
+    update_optimizer(optim, lr, lr_mult)
+    return optim
 
 
-def update_optimizer(optim, *lrs):
+def update_optimizer(optim, lrs, lr_mult=1.0):
     """Pass in 1 or more learning rates, 1 for each layer group, and update the
     optimizer accordingly. The optimizer is updated in place so nothing is
     returned.
@@ -217,23 +207,41 @@ def update_optimizer(optim, *lrs):
     ----------
     optim: torch.optim
         Optimizer object.
-    lrs: float
+    lrs: float, Iterable[float]
         One or more learning rates. If using multiple values, usually the
-        earlier values will be smaller and later values will be larger.
+        earlier values will be smaller and later values will be larger. This
+        can be achieved by passing in a list of LRs that is the same length as
+        the number of layer groups in the optimizer, or by passing in a single
+        LR and a value for lr_mult.
+    lr_mult: float
+        If you pass in fewer LRs than layer groups, `lr_mult` will be used to
+        compute additional learning rates from the one that was passed in.
 
     Returns
     -------
     None
+
+    Examples
+    --------
+    If optim has 3 layer groups, this will result in LRs of [3e-5, 3e-4, 3e-3]
+    in that order:
+    update_optimizer(optim, lrs=3e-3, lr_mult=0.1)
+
+    Again, optim has 3 layer groups. We leave the default lr_mult of 1.0 so
+    each LR will be 3e-3.
+    update_optimizer(optim, lrs=3e-3)
+
+    Again, optim has 3 layer groups. 3 LRs are passed in so lr_mult is unused.
+    update_optimizer(optim, lrs=[1e-3, 1e-3, 3e-3])
     """
-    lrs = list(lrs)
+    if not isinstance(lrs, Iterable): lrs = [lrs]
     n_missing = len(optim.param_groups) - len(lrs)
-    if n_missing > 0:
-        warnings.warn('Fewer learning rates than layer groups. '
-                      'Repeating last LR.')
-        lrs.extend(lrs[-1:] * n_missing)
-    elif n_missing < 0:
-        warnings.warn('More learning rates than layer groups. '
-                      'Last LRs will not be used.')
+
+    if n_missing < 0:
+        raise ValueError('Received more learning rates than layer groups.')
+    while n_missing > 0:
+        lrs.insert(0, lrs[0] * lr_mult)
+        n_missing -= 1
 
     for group, lr in zip(optim.param_groups, lrs):
         group['lr'] = lr
